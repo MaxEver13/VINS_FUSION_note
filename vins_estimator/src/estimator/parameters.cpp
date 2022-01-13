@@ -127,6 +127,7 @@ void readParameters(std::string config_file)
         {
             ROS_WARN(" Optimize extrinsic param around initial guess!");
             EX_CALIB_RESULT_PATH = OUTPUT_FOLDER + "/extrinsic_parameter.csv";
+            std::cout << "EX_CALIB_RESULT_PATH path " << EX_CALIB_RESULT_PATH << std::endl;
         }
         if (ESTIMATE_EXTRINSIC == 0)
             ROS_WARN(" fix extrinsic param ");

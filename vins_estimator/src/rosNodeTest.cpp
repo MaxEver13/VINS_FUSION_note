@@ -29,7 +29,11 @@ queue<sensor_msgs::ImageConstPtr> img0_buf;
 queue<sensor_msgs::ImageConstPtr> img1_buf;
 std::mutex m_buf;
 
-
+/**
+ * @brief: 订阅左目图像信息并存入队列
+ * @param {ImageConstPtr} &img_msg
+ * @return {*}
+ */
 void img0_callback(const sensor_msgs::ImageConstPtr &img_msg)
 {
     m_buf.lock();
@@ -37,6 +41,11 @@ void img0_callback(const sensor_msgs::ImageConstPtr &img_msg)
     m_buf.unlock();
 }
 
+/**
+ * @brief: 订阅右目图像信息并存入队列
+ * @param {ImageConstPtr} &img_msg
+ * @return {*}
+ */
 void img1_callback(const sensor_msgs::ImageConstPtr &img_msg)
 {
     m_buf.lock();
@@ -68,6 +77,11 @@ cv::Mat getImageFromMsg(const sensor_msgs::ImageConstPtr &img_msg)
 }
 
 // extract images with same timestamp from two topics
+/**
+ * @brief: 同步的双目图像，作为estimator的输入
+ * @param {*}
+ * @return {*}
+ */
 void sync_process()
 {
     while(1)
@@ -105,6 +119,7 @@ void sync_process()
                 }
             }
             m_buf.unlock();
+            // 同步的双目图像，作为estimator的输入
             if(!image0.empty())
                 estimator.inputImage(time, image0, image1);
         }
@@ -125,13 +140,17 @@ void sync_process()
             if(!image.empty())
                 estimator.inputImage(time, image);
         }
-
+        // 500Hz
         std::chrono::milliseconds dura(2);
         std::this_thread::sleep_for(dura);
     }
 }
 
-
+/**
+ * @brief: 订阅imu消息,并输入到estimator
+ * @param 
+ * @return 
+ */
 void imu_callback(const sensor_msgs::ImuConstPtr &imu_msg)
 {
     double t = imu_msg->header.stamp.toSec();
@@ -238,7 +257,9 @@ int main(int argc, char **argv)
     string config_file = argv[1];
     printf("config_file: %s\n", argv[1]);
 
+    // 参数设置
     readParameters(config_file);
+    // 设置参数并开启处理线程
     estimator.setParameter();
 
 #ifdef EIGEN_DONT_PARALLELIZE

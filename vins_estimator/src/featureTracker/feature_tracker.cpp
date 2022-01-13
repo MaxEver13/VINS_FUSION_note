@@ -48,36 +48,43 @@ void reduceVector(vector<int> &v, vector<uchar> status)
 FeatureTracker::FeatureTracker()
 {
     stereo_cam = 0;
+    // 特征点id
     n_id = 0;
     hasPrediction = false;
 }
 
 void FeatureTracker::setMask()
 {
+    // 一张全白的模板
     mask = cv::Mat(row, col, CV_8UC1, cv::Scalar(255));
 
     // prefer to keep features that are tracked for long time
+    // 左目前后跟踪的特征点跟踪信息：跟踪次数，特征点图像坐标，特征点id
     vector<pair<int, pair<cv::Point2f, int>>> cnt_pts_id;
 
     for (unsigned int i = 0; i < cur_pts.size(); i++)
         cnt_pts_id.push_back(make_pair(track_cnt[i], make_pair(cur_pts[i], ids[i])));
 
+    // 根据特征点跟踪次数从大到小依次排序
     sort(cnt_pts_id.begin(), cnt_pts_id.end(), [](const pair<int, pair<cv::Point2f, int>> &a, const pair<int, pair<cv::Point2f, int>> &b)
          {
             return a.first > b.first;
          });
 
+    // 按照排序后的特征点更新
     cur_pts.clear();
     ids.clear();
     track_cnt.clear();
 
     for (auto &it : cnt_pts_id)
     {
+        // 防止重复画圆
         if (mask.at<uchar>(it.second.first) == 255)
         {
             cur_pts.push_back(it.second.first);
             ids.push_back(it.second.second);
             track_cnt.push_back(it.first);
+            // 画黑色的圆圈
             cv::circle(mask, it.second.first, MIN_DIST, 0, -1);
         }
     }
@@ -107,13 +114,17 @@ map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> FeatureTracker::trackIm
             clahe->apply(rightImg, rightImg);
     }
     */
+
+    // 先清空左目当前帧跟踪到的特征点
     cur_pts.clear();
 
+    // 左目前后帧跟踪
     if (prev_pts.size() > 0)
     {
         TicToc t_o;
         vector<uchar> status;
         vector<float> err;
+        // 默认不开启预测
         if(hasPrediction)
         {
             cur_pts = predict_pts;
@@ -153,6 +164,8 @@ map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> FeatureTracker::trackIm
         for (int i = 0; i < int(cur_pts.size()); i++)
             if (status[i] && !inBorder(cur_pts[i]))
                 status[i] = 0;
+
+        // 只保留前后帧双向跟踪都检测到的特征点
         reduceVector(prev_pts, status);
         reduceVector(cur_pts, status);
         reduceVector(ids, status);
@@ -161,17 +174,20 @@ map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> FeatureTracker::trackIm
         //printf("track cnt %d\n", (int)ids.size());
     }
 
+    // 上一帧左目被跟踪到的特征点，跟踪次数加1
     for (auto &n : track_cnt)
         n++;
 
     if (1)
     {
         //rejectWithF();
+        // 设置mask
         ROS_DEBUG("set mask begins");
         TicToc t_m;
         setMask();
         ROS_DEBUG("set mask costs %fms", t_m.toc());
 
+        // 如果跟踪特征不足，则重新提取新的特征点
         ROS_DEBUG("detect feature begins");
         TicToc t_t;
         int n_max_cnt = MAX_CNT - static_cast<int>(cur_pts.size());
@@ -185,18 +201,20 @@ map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> FeatureTracker::trackIm
         }
         else
             n_pts.clear();
-        ROS_DEBUG("detect feature costs: %f ms", t_t.toc());
 
+        ROS_DEBUG("detect feature costs: %f ms", t_t.toc());
+        // 新提取的特征点
         for (auto &p : n_pts)
         {
             cur_pts.push_back(p);
             ids.push_back(n_id++);
-            track_cnt.push_back(1);
+            track_cnt.push_back(1); // 跟踪次数为1
         }
         //printf("feature cnt after add %d\n", (int)ids.size());
     }
-
+    // 左目归一化平面的特征点
     cur_un_pts = undistortedPts(cur_pts, m_camera[0]);
+    // 左目特征点的速度
     pts_velocity = ptsVelocity(ids, cur_un_pts, cur_un_pts_map, prev_un_pts_map);
 
     if(!_img1.empty() && stereo_cam)
@@ -206,6 +224,7 @@ map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> FeatureTracker::trackIm
         cur_un_right_pts.clear();
         right_pts_velocity.clear();
         cur_un_right_pts_map.clear();
+        // 左目有检测到特征点
         if(!cur_pts.empty())
         {
             //printf("stereo image; track feature on right image\n");
@@ -213,24 +232,28 @@ map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> FeatureTracker::trackIm
             vector<uchar> status, statusRightLeft;
             vector<float> err;
             // cur left ---- cur right
+            // 当前帧左目到当前帧右目的光流跟踪
             cv::calcOpticalFlowPyrLK(cur_img, rightImg, cur_pts, cur_right_pts, status, err, cv::Size(21, 21), 3);
             // reverse check cur right ---- cur left
+            // 逆向光流跟踪：当前帧右目到当前帧左目
             if(FLOW_BACK)
             {
                 cv::calcOpticalFlowPyrLK(rightImg, cur_img, cur_right_pts, reverseLeftPts, statusRightLeft, err, cv::Size(21, 21), 3);
                 for(size_t i = 0; i < status.size(); i++)
                 {
+                    // 左右目双向跟踪到的特征点
                     if(status[i] && statusRightLeft[i] && inBorder(cur_right_pts[i]) && distance(cur_pts[i], reverseLeftPts[i]) <= 0.5)
                         status[i] = 1;
                     else
                         status[i] = 0;
                 }
             }
-
+            // 当前帧右目跟踪到的特征点
             ids_right = ids;
             reduceVector(cur_right_pts, status);
             reduceVector(ids_right, status);
             // only keep left-right pts
+            // 只保留左右目都跟踪到的点
             /*
             reduceVector(cur_pts, status);
             reduceVector(ids, status);
@@ -238,25 +261,31 @@ map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> FeatureTracker::trackIm
             reduceVector(cur_un_pts, status);
             reduceVector(pts_velocity, status);
             */
+            // 当前帧右目归一化平面的特征点
             cur_un_right_pts = undistortedPts(cur_right_pts, m_camera[1]);
+            // 当前帧右目的特征点的速度
             right_pts_velocity = ptsVelocity(ids_right, cur_un_right_pts, cur_un_right_pts_map, prev_un_right_pts_map);
         }
+        // 保存当前帧右目的跟踪归一化平面的特征点及id,用于计算速度
         prev_un_right_pts_map = cur_un_right_pts_map;
     }
     if(SHOW_TRACK)
         drawTrack(cur_img, rightImg, ids, cur_pts, cur_right_pts, prevLeftPtsMap);
 
+    // 保存当前帧左目的跟踪信息，用于左目的前后帧跟踪
     prev_img = cur_img;
     prev_pts = cur_pts;
     prev_un_pts = cur_un_pts;
     prev_un_pts_map = cur_un_pts_map;
     prev_time = cur_time;
     hasPrediction = false;
-
+    
+    // 保存当前阵左目跟踪的特征点以及id，用于显示左目跟踪特征点的运动方向
     prevLeftPtsMap.clear();
     for(size_t i = 0; i < cur_pts.size(); i++)
         prevLeftPtsMap[ids[i]] = cur_pts[i];
 
+    // 特征点id, 左目，特征点归一化平面坐标，图像坐标，运动速度
     map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> featureFrame;
     for (size_t i = 0; i < ids.size(); i++)
     {
@@ -272,12 +301,12 @@ map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> FeatureTracker::trackIm
         double velocity_x, velocity_y;
         velocity_x = pts_velocity[i].x;
         velocity_y = pts_velocity[i].y;
-
+        // xyz:归一化平面特征点，uv:图像坐标，velocity:归一化平面特征点的运动速度
         Eigen::Matrix<double, 7, 1> xyz_uv_velocity;
         xyz_uv_velocity << x, y, z, p_u, p_v, velocity_x, velocity_y;
         featureFrame[feature_id].emplace_back(camera_id,  xyz_uv_velocity);
     }
-
+    // 特征点id, 右目，特征点归一化平面坐标，图像坐标，运动速度
     if (!_img1.empty() && stereo_cam)
     {
         for (size_t i = 0; i < ids_right.size(); i++)
@@ -305,6 +334,11 @@ map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> FeatureTracker::trackIm
     return featureFrame;
 }
 
+/**
+ * @brief: 通过极线约束，过滤outliers
+ * @param {*}
+ * @return {*}
+ */
 void FeatureTracker::rejectWithF()
 {
     if (cur_pts.size() >= 8)
@@ -433,6 +467,7 @@ vector<cv::Point2f> FeatureTracker::ptsVelocity(vector<int> &ids, vector<cv::Poi
     }
     else
     {
+        // 如果是第一帧进来，速度都为0
         for (unsigned int i = 0; i < cur_pts.size(); i++)
         {
             pts_velocity.push_back(cv::Point2f(0, 0));
@@ -449,6 +484,7 @@ void FeatureTracker::drawTrack(const cv::Mat &imLeft, const cv::Mat &imRight,
 {
     //int rows = imLeft.rows;
     int cols = imLeft.cols;
+    // 左右目图像拼接
     if (!imRight.empty() && stereo_cam)
         cv::hconcat(imLeft, imRight, imTrack);
     else
@@ -471,7 +507,7 @@ void FeatureTracker::drawTrack(const cv::Mat &imLeft, const cv::Mat &imRight,
             //cv::line(imTrack, leftPt, rightPt, cv::Scalar(0, 255, 0), 1, 8, 0);
         }
     }
-    
+    // 前后帧左目跟踪特征点的运动方向
     map<int, cv::Point2f>::iterator mapIt;
     for (size_t i = 0; i < curLeftIds.size(); i++)
     {

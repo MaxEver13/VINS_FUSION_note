@@ -18,6 +18,13 @@
 
 #include <ceres/ceres.h>
 
+/**
+ * @brief: 15表示15维残差（位置p,速度v,姿态q,加速度计零偏ba,陀螺仪零偏bg的误差,其中姿态的误差用delta_theta3维表示）
+ * 参考后端非线性优化.pdf section3 imu约束部分
+ * @param {7}表示状态量(p,q) {9}表示状态量(v, ba, bg)
+ * @return {*}
+ */
+
 class IMUFactor : public ceres::SizedCostFunction<15, 7, 9, 7, 9>
 {
   public:
@@ -27,8 +34,9 @@ class IMUFactor : public ceres::SizedCostFunction<15, 7, 9, 7, 9>
     }
     virtual bool Evaluate(double const *const *parameters, double *residuals, double **jacobians) const
     {
-
+        // 相邻两帧图像之间，顶点(待优化变量)初始化，这里的imu预积分起始时刻的位姿是通过视觉里程计转换而来
         Eigen::Vector3d Pi(parameters[0][0], parameters[0][1], parameters[0][2]);
+        // Eigen::Quaterniond的(w, x, y, z)
         Eigen::Quaterniond Qi(parameters[0][6], parameters[0][3], parameters[0][4], parameters[0][5]);
 
         Eigen::Vector3d Vi(parameters[1][0], parameters[1][1], parameters[1][2]);
@@ -65,7 +73,7 @@ class IMUFactor : public ceres::SizedCostFunction<15, 7, 9, 7, 9>
             pre_integration->repropagate(Bai, Bgi);
         }
 #endif
-
+        // 残差计算
         Eigen::Map<Eigen::Matrix<double, 15, 1>> residual(residuals);
         residual = pre_integration->evaluate(Pi, Qi, Vi, Bai, Bgi,
                                             Pj, Qj, Vj, Baj, Bgj);
@@ -74,6 +82,7 @@ class IMUFactor : public ceres::SizedCostFunction<15, 7, 9, 7, 9>
         //sqrt_info.setIdentity();
         residual = sqrt_info * residual;
 
+        // 雅各比计算        
         if (jacobians)
         {
             double sum_dt = pre_integration->sum_dt;
@@ -92,6 +101,7 @@ class IMUFactor : public ceres::SizedCostFunction<15, 7, 9, 7, 9>
 ///                ROS_BREAK();
             }
 
+            // imu残差关于预积分起始时刻的位置，旋转的雅各比
             if (jacobians[0])
             {
                 Eigen::Map<Eigen::Matrix<double, 15, 7, Eigen::RowMajor>> jacobian_pose_i(jacobians[0]);
@@ -118,6 +128,7 @@ class IMUFactor : public ceres::SizedCostFunction<15, 7, 9, 7, 9>
                     //ROS_BREAK();
                 }
             }
+            // imu残差关于预积分起始时刻的速度，加速度零偏，陀螺仪零偏的雅各比
             if (jacobians[1])
             {
                 Eigen::Map<Eigen::Matrix<double, 15, 9, Eigen::RowMajor>> jacobian_speedbias_i(jacobians[1]);
@@ -147,6 +158,7 @@ class IMUFactor : public ceres::SizedCostFunction<15, 7, 9, 7, 9>
                 //ROS_ASSERT(fabs(jacobian_speedbias_i.maxCoeff()) < 1e8);
                 //ROS_ASSERT(fabs(jacobian_speedbias_i.minCoeff()) < 1e8);
             }
+            // imu残差关于预积分结束时刻的位置，旋转的雅各比
             if (jacobians[2])
             {
                 Eigen::Map<Eigen::Matrix<double, 15, 7, Eigen::RowMajor>> jacobian_pose_j(jacobians[2]);
@@ -166,6 +178,7 @@ class IMUFactor : public ceres::SizedCostFunction<15, 7, 9, 7, 9>
                 //ROS_ASSERT(fabs(jacobian_pose_j.maxCoeff()) < 1e8);
                 //ROS_ASSERT(fabs(jacobian_pose_j.minCoeff()) < 1e8);
             }
+            // imu残差关于预积分结束时刻的速度，加速度零偏，陀螺仪零偏的雅各比
             if (jacobians[3])
             {
                 Eigen::Map<Eigen::Matrix<double, 15, 9, Eigen::RowMajor>> jacobian_speedbias_j(jacobians[3]);

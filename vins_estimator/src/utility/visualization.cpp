@@ -82,14 +82,19 @@ void printStatistics(const Estimator &estimator, double t)
 {
     if (estimator.solver_flag != Estimator::SolverFlag::NON_LINEAR)
         return;
-    //printf("position: %f, %f, %f\r", estimator.Ps[WINDOW_SIZE].x(), estimator.Ps[WINDOW_SIZE].y(), estimator.Ps[WINDOW_SIZE].z());
+    // printf("position: %f, %f, %f\r", estimator.Ps[WINDOW_SIZE].x(), estimator.Ps[WINDOW_SIZE].y(), estimator.Ps[WINDOW_SIZE].z());
     ROS_DEBUG_STREAM("position: " << estimator.Ps[WINDOW_SIZE].transpose());
     ROS_DEBUG_STREAM("orientation: " << estimator.Vs[WINDOW_SIZE].transpose());
     if (ESTIMATE_EXTRINSIC)
     {
         cv::FileStorage fs(EX_CALIB_RESULT_PATH, cv::FileStorage::WRITE);
+        if (!fs.isOpened())
+        {
+            ROS_WARN("EX_CALIB_RESULT_FILE open failed");
+        }
         for (int i = 0; i < NUM_OF_CAM; i++)
         {
+            ROS_WARN("calibration result for camera %d", i);
             //ROS_DEBUG("calibration result for camera %d", i);
             ROS_DEBUG_STREAM("extirnsic tic: " << estimator.tic[i].transpose());
             ROS_DEBUG_STREAM("extrinsic ric: " << Utility::R2ypr(estimator.ric[i]).transpose());
@@ -97,6 +102,7 @@ void printStatistics(const Estimator &estimator, double t)
             Eigen::Matrix4d eigen_T = Eigen::Matrix4d::Identity();
             eigen_T.block<3, 3>(0, 0) = estimator.ric[i];
             eigen_T.block<3, 1>(0, 3) = estimator.tic[i];
+            std::cout << "eigen_T: " << eigen_T << std::endl;
             cv::Mat cv_T;
             cv::eigen2cv(eigen_T, cv_T);
             if(i == 0)
@@ -170,8 +176,8 @@ void pubOdometry(const Estimator &estimator, const std_msgs::Header &header)
               << estimator.Vs[WINDOW_SIZE].z() << "," << endl;
         foutC.close();
         Eigen::Vector3d tmp_T = estimator.Ps[WINDOW_SIZE];
-        printf("time: %f, t: %f %f %f q: %f %f %f %f \n", header.stamp.toSec(), tmp_T.x(), tmp_T.y(), tmp_T.z(),
-                                                          tmp_Q.w(), tmp_Q.x(), tmp_Q.y(), tmp_Q.z());
+        // printf("time: %f, t: %f %f %f q: %f %f %f %f \n", header.stamp.toSec(), tmp_T.x(), tmp_T.y(), tmp_T.z(),
+        //                                                   tmp_Q.w(), tmp_Q.x(), tmp_Q.y(), tmp_Q.z());
     }
 }
 

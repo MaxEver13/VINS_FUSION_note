@@ -28,6 +28,7 @@ using namespace Eigen;
 class FeaturePerFrame
 {
   public:
+    // 初始化左目的观测特征
     FeaturePerFrame(const Eigen::Matrix<double, 7, 1> &_point, double td)
     {
         point.x() = _point(0);
@@ -40,6 +41,7 @@ class FeaturePerFrame
         cur_td = td;
         is_stereo = false;
     }
+    // 初始化右目的观测特征
     void rightObservation(const Eigen::Matrix<double, 7, 1> &_point)
     {
         pointRight.x() = _point(0);

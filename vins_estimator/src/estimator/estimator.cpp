@@ -42,6 +42,7 @@ void Estimator::clearState()
     initP = Eigen::Vector3d(0, 0, 0);
     initR = Eigen::Matrix3d::Identity();
     inputImageCnt = 0;
+    // 第一帧
     initFirstPoseFlag = false;
 
     for (int i = 0; i < WINDOW_SIZE + 1; i++)
@@ -67,10 +68,11 @@ void Estimator::clearState()
         tic[i] = Vector3d::Zero();
         ric[i] = Matrix3d::Identity();
     }
-
+    // 第一帧imu
     first_imu = false,
     sum_of_back = 0;
     sum_of_front = 0;
+    // imu帧数
     frame_count = 0;
     solver_flag = INITIAL;
     initial_timestamp = 0;
@@ -165,7 +167,7 @@ void Estimator::inputImage(double t, const cv::Mat &_img, const cv::Mat &_img1)
 
     if(_img1.empty())
         featureFrame = featureTracker.trackImage(t, _img);
-    else
+    else // 双目跟踪
         featureFrame = featureTracker.trackImage(t, _img, _img1);
     //printf("featureTracker time: %f\n", featureTrackerTime.toc());
 
@@ -198,12 +200,14 @@ void Estimator::inputImage(double t, const cv::Mat &_img, const cv::Mat &_img1)
 
 void Estimator::inputIMU(double t, const Vector3d &linearAcceleration, const Vector3d &angularVelocity)
 {
+    // 加速度和陀螺仪数据存入队列
     mBuf.lock();
     accBuf.push(make_pair(t, linearAcceleration));
     gyrBuf.push(make_pair(t, angularVelocity));
     //printf("input imu with time %f \n", t);
     mBuf.unlock();
 
+    // 当初始化结束后，才做imu预积分并发布imu频率的里程计
     if (solver_flag == NON_LINEAR)
     {
         mPropagate.lock();
@@ -280,10 +284,12 @@ void Estimator::processMeasurements()
             curTime = feature.first + td;
             while(1)
             {
+                // 如果不使用imu或者imu数据可用
                 if ((!USE_IMU  || IMUAvailable(feature.first + td)))
                     break;
                 else
-                {
+                {   
+                    // imu数据不可用，等待imu数据
                     printf("wait for imu ... \n");
                     if (! MULTIPLE_THREAD)
                         return;
@@ -291,6 +297,8 @@ void Estimator::processMeasurements()
                     std::this_thread::sleep_for(dura);
                 }
             }
+
+            // 更新两帧图像之间的imu数据
             mBuf.lock();
             if(USE_IMU)
                 getIMUInterval(prevTime, curTime, accVector, gyrVector);
@@ -300,8 +308,10 @@ void Estimator::processMeasurements()
 
             if(USE_IMU)
             {
+                // 第一帧初始化imu在世界坐标系下的位姿
                 if(!initFirstPoseFlag)
                     initFirstIMUPose(accVector);
+                // 两帧图像之间的imu预积分
                 for(size_t i = 0; i < accVector.size(); i++)
                 {
                     double dt;
@@ -311,11 +321,12 @@ void Estimator::processMeasurements()
                         dt = curTime - accVector[i - 1].first;
                     else
                         dt = accVector[i].first - accVector[i - 1].first;
-                    processIMU(accVector[i].first, dt, accVector[i].second, gyrVector[i].second);
+                    processIMU(dt, accVector[i].second, gyrVector[i].second);
                 }
             }
             mProcess.lock();
             processImage(feature.second, feature.first);
+            // 更新上一次的imu时间戳
             prevTime = curTime;
 
             printStatistics(*this, 0);
@@ -341,7 +352,12 @@ void Estimator::processMeasurements()
     }
 }
 
-
+/**
+ * @brief: 通过imu加速度与世界坐标系对齐，初始化imu在世界坐标系下的旋转
+ * 当然此时的位置是(0, 0, 0)
+ * @param 
+ * @return 
+ */
 void Estimator::initFirstIMUPose(vector<pair<double, Eigen::Vector3d>> &accVector)
 {
     printf("init first imu pose\n");
@@ -356,6 +372,7 @@ void Estimator::initFirstIMUPose(vector<pair<double, Eigen::Vector3d>> &accVecto
     averAcc = averAcc / n;
     printf("averge acc %f %f %f\n", averAcc.x(), averAcc.y(), averAcc.z());
     Matrix3d R0 = Utility::g2R(averAcc);
+    // 这里没有必要再去处理yaw为0了
     double yaw = Utility::R2ypr(R0).x();
     R0 = Utility::ypr2R(Eigen::Vector3d{-yaw, 0, 0}) * R0;
     Rs[0] = R0;
@@ -371,22 +388,30 @@ void Estimator::initFirstPose(Eigen::Vector3d p, Eigen::Matrix3d r)
     initR = r;
 }
 
-
-void Estimator::processIMU(double t, double dt, const Vector3d &linear_acceleration, const Vector3d &angular_velocity)
+/**
+ * @brief: 
+ * @param {double} dt
+ * @param {Vector3d} &linear_acceleration
+ * @param {Vector3d} &angular_velocity
+ * @return {*}
+ */
+void Estimator::processIMU(double dt, const Vector3d &linear_acceleration, const Vector3d &angular_velocity)
 {
+    // 处理第一帧imu数据
     if (!first_imu)
     {
         first_imu = true;
         acc_0 = linear_acceleration;
         gyr_0 = angular_velocity;
     }
-
+    // frame_count最大为10,第一帧进来的时候先初始化了imu预积分
     if (!pre_integrations[frame_count])
     {
         pre_integrations[frame_count] = new IntegrationBase{acc_0, gyr_0, Bas[frame_count], Bgs[frame_count]};
     }
     if (frame_count != 0)
     {
+        // imu预积分计算
         pre_integrations[frame_count]->push_back(dt, linear_acceleration, angular_velocity);
         //if(solver_flag != NON_LINEAR)
             tmp_pre_integration->push_back(dt, linear_acceleration, angular_velocity);
@@ -412,6 +437,8 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
 {
     ROS_DEBUG("new image coming ------------------------------------------");
     ROS_DEBUG("Adding feature points %lu", image.size());
+    // 添加特征点观测并检查是否当前帧是关键帧
+    // 如果是关键帧，滑窗边缘化最老的帧
     if (f_manager.addFeatureCheckParallax(frame_count, image, td))
     {
         marginalization_flag = MARGIN_OLD;
@@ -419,18 +446,21 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
     }
     else
     {
+        // 如果不是关键帧，滑窗边缘化次新帧
         marginalization_flag = MARGIN_SECOND_NEW;
         //printf("non-keyframe\n");
     }
 
     ROS_DEBUG("%s", marginalization_flag ? "Non-keyframe" : "Keyframe");
-    ROS_DEBUG("Solving %d", frame_count);
+    ROS_WARN("Solving %d", frame_count);
     ROS_DEBUG("number of feature: %d", f_manager.getFeatureCount());
     Headers[frame_count] = header;
 
     ImageFrame imageframe(image, header);
+    // 前一帧图像到当前帧之间的imu预积分
     imageframe.pre_integration = tmp_pre_integration;
     all_image_frame.insert(make_pair(header, imageframe));
+    // 重置imu预积分
     tmp_pre_integration = new IntegrationBase{acc_0, gyr_0, Bas[frame_count], Bgs[frame_count]};
 
     if(ESTIMATE_EXTRINSIC == 2)
@@ -451,6 +481,7 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
         }
     }
 
+    // 初始化
     if (solver_flag == INITIAL)
     {
         // monocular + IMU initilization
@@ -478,10 +509,14 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
         }
 
         // stereo + IMU initilization
+        // 双目+imu初始化
         if(STEREO && USE_IMU)
         {
+            // pnp求解当前帧imu位姿
             f_manager.initFramePoseByPnP(frame_count, Ps, Rs, tic, ric);
+            // 所有特征点三角化
             f_manager.triangulate(frame_count, Ps, Rs, tic, ric);
+            // 滑窗满了，共11帧
             if (frame_count == WINDOW_SIZE)
             {
                 map<double, ImageFrame>::iterator frame_it;
@@ -492,7 +527,9 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
                     frame_it->second.T = Ps[i];
                     i++;
                 }
+                // 更新陀螺仪零偏
                 solveGyroscopeBias(all_image_frame, Bgs);
+                // imu预积分重新积分
                 for (int i = 0; i <= WINDOW_SIZE; i++)
                 {
                     pre_integrations[i]->repropagate(Vector3d::Zero(), Bgs[i]);
@@ -522,6 +559,7 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
             }
         }
 
+        // 滑窗内状态量更新
         if(frame_count < WINDOW_SIZE)
         {
             frame_count++;
@@ -814,11 +852,16 @@ bool Estimator::relativePose(Matrix3d &relative_R, Vector3d &relative_T, int &l)
     }
     return false;
 }
-
+/**
+ * @brief: 滑窗内优化变量转换成数组
+ * @param 
+ * @return 
+ */
 void Estimator::vector2double()
 {
     for (int i = 0; i <= WINDOW_SIZE; i++)
     {
+        // imu位姿
         para_Pose[i][0] = Ps[i].x();
         para_Pose[i][1] = Ps[i].y();
         para_Pose[i][2] = Ps[i].z();
@@ -830,6 +873,7 @@ void Estimator::vector2double()
 
         if(USE_IMU)
         {
+            // imu速度和零偏
             para_SpeedBias[i][0] = Vs[i].x();
             para_SpeedBias[i][1] = Vs[i].y();
             para_SpeedBias[i][2] = Vs[i].z();
@@ -846,6 +890,7 @@ void Estimator::vector2double()
 
     for (int i = 0; i < NUM_OF_CAM; i++)
     {
+        // 左右目到imu的外参
         para_Ex_Pose[i][0] = tic[i].x();
         para_Ex_Pose[i][1] = tic[i].y();
         para_Ex_Pose[i][2] = tic[i].z();
@@ -856,19 +901,22 @@ void Estimator::vector2double()
         para_Ex_Pose[i][6] = q.w();
     }
 
-
+    // 特征逆深度参数，最大1000个
     VectorXd dep = f_manager.getDepthVector();
     for (int i = 0; i < f_manager.getFeatureCount(); i++)
         para_Feature[i][0] = dep(i);
 
+    // imu与图像之间的时间差
     para_Td[0][0] = td;
 }
 
 void Estimator::double2vector()
 {
+    // 第一帧imu位姿
     Vector3d origin_R0 = Utility::R2ypr(Rs[0]);
     Vector3d origin_P0 = Ps[0];
 
+    // 如果失败，用上一次最新优化的位姿当做第一帧imu位姿
     if (failure_occur)
     {
         origin_R0 = Utility::R2ypr(last_R0);
@@ -876,6 +924,7 @@ void Estimator::double2vector()
         failure_occur = 0;
     }
 
+    // 如果使用imu,滑窗内第一帧imu位姿不固定，需要对齐到第一帧位姿上
     if(USE_IMU)
     {
         Vector3d origin_R00 = Utility::R2ypr(Quaterniond(para_Pose[0][6],
@@ -1004,6 +1053,7 @@ bool Estimator::failureDetection()
 void Estimator::optimization()
 {
     TicToc t_whole, t_prepare;
+    // 准备参数形式
     vector2double();
 
     ceres::Problem problem;
@@ -1012,6 +1062,12 @@ void Estimator::optimization()
     loss_function = new ceres::HuberLoss(1.0);
     //loss_function = new ceres::CauchyLoss(1.0 / FOCAL_LENGTH);
     //ceres::LossFunction* loss_function = new ceres::HuberLoss(1.0);
+
+    /**
+     * step1: 添加参数块
+     * 
+    */
+    // 1. 添加位姿，速度，零偏参数块
     for (int i = 0; i < frame_count + 1; i++)
     {
         ceres::LocalParameterization *local_parameterization = new PoseLocalParameterization();
@@ -1019,9 +1075,11 @@ void Estimator::optimization()
         if(USE_IMU)
             problem.AddParameterBlock(para_SpeedBias[i], SIZE_SPEEDBIAS);
     }
+    // 不使用imu时，第一帧imu位姿固定
     if(!USE_IMU)
         problem.SetParameterBlockConstant(para_Pose[0]);
 
+    // 2.　添加左右目与imu外参参数块
     for (int i = 0; i < NUM_OF_CAM; i++)
     {
         ceres::LocalParameterization *local_parameterization = new PoseLocalParameterization();
@@ -1037,11 +1095,18 @@ void Estimator::optimization()
             problem.SetParameterBlockConstant(para_Ex_Pose[i]);
         }
     }
+    // 3.　添加imu与图像的时间延迟参数块
     problem.AddParameterBlock(para_Td[0], 1);
 
     if (!ESTIMATE_TD || Vs[0].norm() < 0.2)
         problem.SetParameterBlockConstant(para_Td[0]);
 
+    /**
+     * step2: 添加残差块
+     * 
+    */
+
+    // １. 添加先验信息残差块
     if (last_marginalization_info && last_marginalization_info->valid)
     {
         // construct new marginlization_factor
@@ -1049,6 +1114,8 @@ void Estimator::optimization()
         problem.AddResidualBlock(marginalization_factor, NULL,
                                  last_marginalization_parameter_blocks);
     }
+
+    // ２. 添加imu预积分残差块
     if(USE_IMU)
     {
         for (int i = 0; i < frame_count; i++)
@@ -1057,46 +1124,64 @@ void Estimator::optimization()
             if (pre_integrations[j]->sum_dt > 10.0)
                 continue;
             IMUFactor* imu_factor = new IMUFactor(pre_integrations[j]);
+            /**
+             * cost function: imu_factor
+             * lost function: NULL
+             * parameter_blocks: para_Pose[i], para_SpeedBias[i], para_Pose[j], para_SpeedBias[j]
+             */            
             problem.AddResidualBlock(imu_factor, NULL, para_Pose[i], para_SpeedBias[i], para_Pose[j], para_SpeedBias[j]);
         }
     }
 
+    // 3. 添加视觉重投影残差块
     int f_m_cnt = 0;
     int feature_index = -1;
     for (auto &it_per_id : f_manager.feature)
     {
+        // 过滤被观测次数太少的特征点
         it_per_id.used_num = it_per_id.feature_per_frame.size();
         if (it_per_id.used_num < 4)
             continue;
  
         ++feature_index;
 
-        int imu_i = it_per_id.start_frame, imu_j = imu_i - 1;
-        
+        // 在滑窗中第几帧第一次被观测到
+        int imu_i = it_per_id.start_frame;
+        // 滑窗中的上一帧
+        int imu_j = imu_i - 1;
+        // 首次被观测到的左目归一化平面坐标
         Vector3d pts_i = it_per_id.feature_per_frame[0].point;
 
+        // 遍历该特征点的所有观测帧
         for (auto &it_per_frame : it_per_id.feature_per_frame)
         {
             imu_j++;
+            // 非首次观测帧
             if (imu_i != imu_j)
             {
+                // 特征点在当前帧观测左目上的归一化平面坐标
                 Vector3d pts_j = it_per_frame.point;
+                // 通过空间点首次左目观测(归一化平面坐标)与当前帧左目观测(归一化平面坐标)，建立重投影误差
                 ProjectionTwoFrameOneCamFactor *f_td = new ProjectionTwoFrameOneCamFactor(pts_i, pts_j, it_per_id.feature_per_frame[0].velocity, it_per_frame.velocity,
                                                                  it_per_id.feature_per_frame[0].cur_td, it_per_frame.cur_td);
                 problem.AddResidualBlock(f_td, loss_function, para_Pose[imu_i], para_Pose[imu_j], para_Ex_Pose[0], para_Feature[feature_index], para_Td[0]);
             }
 
+            //　如果是双目
             if(STEREO && it_per_frame.is_stereo)
-            {                
+            { 
+                // 特征点在当前帧观测右目上的归一化平面坐标               
                 Vector3d pts_j_right = it_per_frame.pointRight;
                 if(imu_i != imu_j)
                 {
+                    // 通过特征点的首次左目观测和当前帧的右目观测，建立重投影误差
                     ProjectionTwoFrameTwoCamFactor *f = new ProjectionTwoFrameTwoCamFactor(pts_i, pts_j_right, it_per_id.feature_per_frame[0].velocity, it_per_frame.velocityRight,
                                                                  it_per_id.feature_per_frame[0].cur_td, it_per_frame.cur_td);
                     problem.AddResidualBlock(f, loss_function, para_Pose[imu_i], para_Pose[imu_j], para_Ex_Pose[0], para_Ex_Pose[1], para_Feature[feature_index], para_Td[0]);
                 }
                 else
                 {
+                    // 通过特征点在左右目的首次观测，建立重投影误差
                     ProjectionOneFrameTwoCamFactor *f = new ProjectionOneFrameTwoCamFactor(pts_i, pts_j_right, it_per_id.feature_per_frame[0].velocity, it_per_frame.velocityRight,
                                                                  it_per_id.feature_per_frame[0].cur_td, it_per_frame.cur_td);
                     problem.AddResidualBlock(f, loss_function, para_Ex_Pose[0], para_Ex_Pose[1], para_Feature[feature_index], para_Td[0]);
@@ -1109,6 +1194,11 @@ void Estimator::optimization()
 
     ROS_DEBUG("visual measurement count: %d", f_m_cnt);
     //printf("prepare for ceres: %f \n", t_prepare.toc());
+
+    /**
+     * step３:　ceres solver优化求解
+     * 
+    */
 
     ceres::Solver::Options options;
 
@@ -1130,6 +1220,7 @@ void Estimator::optimization()
     ROS_DEBUG("Iterations : %d", static_cast<int>(summary.iterations.size()));
     //printf("solver costs: %f \n", t_solver.toc());
 
+    // 更新滑窗内所有优化变量
     double2vector();
     //printf("frame_count: %d \n", frame_count);
 
@@ -1567,9 +1658,16 @@ void Estimator::outliersRejection(set<int> &removeIndex)
 
     }
 }
-
+/**
+ * @brief: 中值积分计算两个相邻时刻的P,V,Q
+ * @param {double} t
+ * @param {Vector3d} linear_acceleration
+ * @param {Vector3d} angular_velocity
+ * @return {*}
+ */
 void Estimator::fastPredictIMU(double t, Eigen::Vector3d linear_acceleration, Eigen::Vector3d angular_velocity)
 {
+    // 积分时间
     double dt = t - latest_time;
     latest_time = t;
     Eigen::Vector3d un_acc_0 = latest_Q * (latest_acc_0 - latest_Ba) - g;

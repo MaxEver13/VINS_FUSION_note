@@ -49,7 +49,7 @@ class Estimator
     void inputIMU(double t, const Vector3d &linearAcceleration, const Vector3d &angularVelocity);
     void inputFeature(double t, const map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> &featureFrame);
     void inputImage(double t, const cv::Mat &_img, const cv::Mat &_img1 = cv::Mat());
-    void processIMU(double t, double dt, const Vector3d &linear_acceleration, const Vector3d &angular_velocity);
+    void processIMU(double dt, const Vector3d &linear_acceleration, const Vector3d &angular_velocity);
     void processImage(const map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> &image, const double header);
     void processMeasurements();
     void changeSensorType(int use_imu, int use_stereo);
@@ -110,15 +110,16 @@ class Estimator
     MarginalizationFlag  marginalization_flag;
     Vector3d g;
 
+    // 相机到imu的外参
     Matrix3d ric[2];
     Vector3d tic[2];
-
+    // 滑窗内的位置，速度，姿态，加速度的bias,陀螺仪的bias
     Vector3d        Ps[(WINDOW_SIZE + 1)];
     Vector3d        Vs[(WINDOW_SIZE + 1)];
     Matrix3d        Rs[(WINDOW_SIZE + 1)];
     Vector3d        Bas[(WINDOW_SIZE + 1)];
     Vector3d        Bgs[(WINDOW_SIZE + 1)];
-    double td;
+    double td;  // imu数据与图像数据之间的时间差
 
     Matrix3d back_R0, last_R, last_R0;
     Vector3d back_P0, last_P, last_P0;
@@ -151,7 +152,7 @@ class Estimator
 
     double para_Pose[WINDOW_SIZE + 1][SIZE_POSE];
     double para_SpeedBias[WINDOW_SIZE + 1][SIZE_SPEEDBIAS];
-    double para_Feature[NUM_OF_F][SIZE_FEATURE];
+    double para_Feature[NUM_OF_F][SIZE_FEATURE];　// 最大1000个特征逆深度参数
     double para_Ex_Pose[2][SIZE_POSE];
     double para_Retrive_Pose[SIZE_POSE];
     double para_Td[1][1];
@@ -168,6 +169,7 @@ class Estimator
     Eigen::Vector3d initP;
     Eigen::Matrix3d initR;
 
+    // 最新状态，上一次更新后的状态
     double latest_time;
     Eigen::Vector3d latest_P, latest_V, latest_Ba, latest_Bg, latest_acc_0, latest_gyr_0;
     Eigen::Quaterniond latest_Q;

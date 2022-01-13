@@ -11,6 +11,14 @@
 
 #include "initial_alignment.h"
 
+
+/**
+ * @brief: 利用视觉求出的位姿旋转与imu预积分得到旋转对齐，求解陀螺仪的偏置
+ * @param 
+ * @param 
+ * @return 
+ * @ref:https://blog.csdn.net/qq_39266065/article/details/121011740
+ */
 void solveGyroscopeBias(map<double, ImageFrame> &all_image_frame, Vector3d* Bgs)
 {
     Matrix3d A;
@@ -36,9 +44,11 @@ void solveGyroscopeBias(map<double, ImageFrame> &all_image_frame, Vector3d* Bgs)
     delta_bg = A.ldlt().solve(b);
     ROS_WARN_STREAM("gyroscope bias initial calibration " << delta_bg.transpose());
 
+    // 得到新的陀螺仪bias
     for (int i = 0; i <= WINDOW_SIZE; i++)
         Bgs[i] += delta_bg;
 
+    // 重新积分
     for (frame_i = all_image_frame.begin(); next(frame_i) != all_image_frame.end( ); frame_i++)
     {
         frame_j = next(frame_i);

@@ -14,6 +14,12 @@
 Eigen::Matrix2d ProjectionTwoFrameOneCamFactor::sqrt_info;
 double ProjectionTwoFrameOneCamFactor::sum_t;
 
+
+/**
+ * @brief: 通过空间点首次左目观测(归一化平面坐标)与当前帧左目观测(归一化平面坐标)，建立重投影误差
+ * @param {*}
+ * @return {*}
+ */
 ProjectionTwoFrameOneCamFactor::ProjectionTwoFrameOneCamFactor(const Eigen::Vector3d &_pts_i, const Eigen::Vector3d &_pts_j, 
                                        const Eigen::Vector2d &_velocity_i, const Eigen::Vector2d &_velocity_j,
                                        const double _td_i, const double _td_j) : 
@@ -42,6 +48,7 @@ ProjectionTwoFrameOneCamFactor::ProjectionTwoFrameOneCamFactor(const Eigen::Vect
 
 bool ProjectionTwoFrameOneCamFactor::Evaluate(double const *const *parameters, double *residuals, double **jacobians) const
 {
+    // 优化变量：首帧imu位姿，当前帧位姿，左目到imu的外参，特征点逆深度，imu与相机时差
     TicToc tic_toc;
     Eigen::Vector3d Pi(parameters[0][0], parameters[0][1], parameters[0][2]);
     Eigen::Quaterniond Qi(parameters[0][6], parameters[0][3], parameters[0][4], parameters[0][5]);
@@ -56,20 +63,32 @@ bool ProjectionTwoFrameOneCamFactor::Evaluate(double const *const *parameters, d
 
     double td = parameters[4][0];
 
+    // 通过imu与相机的时差以及像素的运动速度，计算得到准确的归一化图像坐标
     Eigen::Vector3d pts_i_td, pts_j_td;
     pts_i_td = pts_i - (td - td_i) * velocity_i;
     pts_j_td = pts_j - (td - td_j) * velocity_j;
+
+    /**
+     * 重投影过程：从首帧相机坐标系的3d点
+    */
+
+    // 首帧相机坐标系
     Eigen::Vector3d pts_camera_i = pts_i_td / inv_dep_i;
+    // 首帧imu坐标系
     Eigen::Vector3d pts_imu_i = qic * pts_camera_i + tic;
+    // 首帧世界坐标系
     Eigen::Vector3d pts_w = Qi * pts_imu_i + Pi;
+    // 当前帧imu坐标系
     Eigen::Vector3d pts_imu_j = Qj.inverse() * (pts_w - Pj);
+    // 当前帧相机坐标系
     Eigen::Vector3d pts_camera_j = qic.inverse() * (pts_imu_j - tic);
     Eigen::Map<Eigen::Vector2d> residual(residuals);
 
 #ifdef UNIT_SPHERE_ERROR 
     residual =  tangent_base * (pts_camera_j.normalized() - pts_j_td.normalized());
-#else
+#else    
     double dep_j = pts_camera_j.z();
+    // 归一化平面坐标系
     residual = (pts_camera_j / dep_j).head<2>() - pts_j_td.head<2>();
 #endif
 
@@ -93,6 +112,8 @@ bool ProjectionTwoFrameOneCamFactor::Evaluate(double const *const *parameters, d
                      - x1 * x3 / pow(norm, 3),            - x2 * x3 / pow(norm, 3),            1.0 / norm - x3 * x3 / pow(norm, 3);
         reduce = tangent_base * norm_jaco;
 #else
+        // 重投影误差关于当前相机坐标系下空间点坐标的导数
+        //　参考视觉slam十四讲p(7.41)
         reduce << 1. / dep_j, 0, -pts_camera_j(0) / (dep_j * dep_j),
             0, 1. / dep_j, -pts_camera_j(1) / (dep_j * dep_j);
 #endif
@@ -102,6 +123,8 @@ bool ProjectionTwoFrameOneCamFactor::Evaluate(double const *const *parameters, d
         {
             Eigen::Map<Eigen::Matrix<double, 2, 7, Eigen::RowMajor>> jacobian_pose_i(jacobians[0]);
 
+            // 当前相机坐标系下空间点坐标关于上一帧位姿扰动的导数
+            // 参考后端非线性优化.pdf　4.3.1
             Eigen::Matrix<double, 3, 6> jaco_i;
             jaco_i.leftCols<3>() = ric.transpose() * Rj.transpose();
             jaco_i.rightCols<3>() = ric.transpose() * Rj.transpose() * Ri * -Utility::skewSymmetric(pts_imu_i);
@@ -114,6 +137,8 @@ bool ProjectionTwoFrameOneCamFactor::Evaluate(double const *const *parameters, d
         {
             Eigen::Map<Eigen::Matrix<double, 2, 7, Eigen::RowMajor>> jacobian_pose_j(jacobians[1]);
 
+            // 当前相机坐标系下空间点坐标关于当前帧位姿扰动的导数
+            // 参考后端非线性优化.pdf　4.3.2
             Eigen::Matrix<double, 3, 6> jaco_j;
             jaco_j.leftCols<3>() = ric.transpose() * -Rj.transpose();
             jaco_j.rightCols<3>() = ric.transpose() * Utility::skewSymmetric(pts_imu_j);
@@ -125,6 +150,8 @@ bool ProjectionTwoFrameOneCamFactor::Evaluate(double const *const *parameters, d
         {
             Eigen::Map<Eigen::Matrix<double, 2, 7, Eigen::RowMajor>> jacobian_ex_pose(jacobians[2]);
             Eigen::Matrix<double, 3, 6> jaco_ex;
+            // 当前相机坐标系下空间点坐标关于当前帧位姿扰动的导数
+            // 参考后端非线性优化.pdf　4.3.3
             jaco_ex.leftCols<3>() = ric.transpose() * (Rj.transpose() * Ri - Eigen::Matrix3d::Identity());
             Eigen::Matrix3d tmp_r = ric.transpose() * Rj.transpose() * Ri * ric;
             jaco_ex.rightCols<3>() = -tmp_r * Utility::skewSymmetric(pts_camera_i) + Utility::skewSymmetric(tmp_r * pts_camera_i) +

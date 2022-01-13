@@ -1,3 +1,11 @@
+/*
+ * @Descripttion: 
+ * @version: 
+ * @Author: Jiawen Ji
+ * @Date: 2021-12-01 16:02:49
+ * @LastEditors: Jiawen Ji
+ * @LastEditTime: 2021-12-16 14:25:27
+ */
 /*******************************************************
  * Copyright (C) 2019, Aerial Robotics Group, Hong Kong University of Science and Technology
  * 
@@ -63,7 +71,7 @@ public:
     cv::Mat imTrack;
     cv::Mat mask;
     cv::Mat fisheye_mask;
-    cv::Mat prev_img, cur_img;
+    cv::Mat prev_img, cur_img; // 左目
     vector<cv::Point2f> n_pts;
     vector<cv::Point2f> predict_pts;
     vector<cv::Point2f> predict_pts_debug;

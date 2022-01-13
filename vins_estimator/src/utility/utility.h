@@ -72,6 +72,11 @@ class Utility
         return ans;
     }
 
+    /**
+     * @brief: 旋转矩阵R转欧拉角(yaw, pitch, roll)
+     * @param 
+     * @return 
+     */
     static Eigen::Vector3d R2ypr(const Eigen::Matrix3d &R)
     {
         Eigen::Vector3d n = R.col(0);
@@ -89,6 +94,11 @@ class Utility
         return ypr / M_PI * 180.0;
     }
 
+    /**
+     * @brief: 欧拉角转旋转矩阵
+     * @param 
+     * @return 
+     */
     template <typename Derived>
     static Eigen::Matrix<typename Derived::Scalar, 3, 3> ypr2R(const Eigen::MatrixBase<Derived> &ypr)
     {
@@ -97,17 +107,17 @@ class Utility
         Scalar_t y = ypr(0) / 180.0 * M_PI;
         Scalar_t p = ypr(1) / 180.0 * M_PI;
         Scalar_t r = ypr(2) / 180.0 * M_PI;
-
+        // 绕z轴旋转---yaw
         Eigen::Matrix<Scalar_t, 3, 3> Rz;
         Rz << cos(y), -sin(y), 0,
             sin(y), cos(y), 0,
             0, 0, 1;
-
+        // 绕y轴旋转---pitch
         Eigen::Matrix<Scalar_t, 3, 3> Ry;
         Ry << cos(p), 0., sin(p),
             0., 1., 0.,
             -sin(p), 0., cos(p);
-
+        // 绕x旋转---roll
         Eigen::Matrix<Scalar_t, 3, 3> Rx;
         Rx << 1., 0., 0.,
             0., cos(r), -sin(r),
